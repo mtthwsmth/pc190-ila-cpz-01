@@ -1,0 +1,702 @@
+---
+title: "pc190_03_oligos_cleanup"
+author: "Matthew Smith"
+date: "2025-10-24"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float:
+      collapsed: true
+      position: right
+    theme: united
+    df_print: kable
+knitr:
+  opts_chunk:
+    warning: false
+    message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+### Libraries
+
+```{r}
+library(tidyverse)
+library(qs2)
+library(Seurat)
+library(scCustomize)
+library(clustree)
+library(patchwork)
+source("mds_scRNAseq_functions.R")
+```
+
+### Workspace
+
+```{r}
+options(future.globals.maxSize = 30000*1024^2) # 30 GB
+```
+
+### Data Shortcut
+
+## Cleaning OL - Rd2
+
+I'm calling the subsetting Rd1. So first round cleaning is Rd2.
+
+Import the seurat object created in rmd02 by clustering all cells from 10x filtered
+features, then running clustering and subsetting to the clusters that looked like
+they might contain some OL.
+
+### Load subsetted so
+
+```{r}
+so <- qs_read(
+  "06_data_objects/pc190_02_so_rd1_oligos.qs2"
+)
+```
+
+How many cells?
+
+```{r}
+so
+table(so$orig.ident)
+```
+Starting with 65,304 cells. Definitely weighted twoards naive, particularly N3.
+
+## Process Oligo Lineage Rd2
+
+We're calling Rd1 the work done in Rmd02. So we start Rd2 here.
+
+### Seurat Pipeline Rd2
+
+First, just use a normal Seurat pipeline. Split by orig.ident
+
+```{r}
+so[["RNA"]] <- split(so[["RNA"]], f = so$orig.ident)
+```
+
+Then LogNormalize, HVGs per layer, ScaleData, PCA, UMAP on 25 dims, Graph
+on 25 dims, Find Clusters at resolution of 0.1 and 0.2.
+
+```{r}
+so <- NormalizeData(so) %>% FindVariableFeatures() %>% ScaleData() %>%
+  RunPCA() %>% RunUMAP(dims = 1:25) %>% FindNeighbors(dims = 1:25)
+so <- FindClusters(so, resolution = c(0.1, 0.2))
+so <- RunTSNE(so, dims = 1:25)
+```
+
+#### Inspect UMAP Rd2
+
+Inspect metadata variables on the umap.
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so,
+  group.by = "group",
+  label = TRUE
+  )
+p1
+p2 <- DimPlot_scCustom(
+  so,
+  group.by = "orig.ident",
+  label = FALSE
+  )
+p2
+p3 <- DimPlot_scCustom(
+  so,
+  group.by = "dbl_class",
+  label = TRUE
+  ) + NoLegend()
+p3
+```
+
+We have a strong seperation of N vs V/T in the main island. Connected to a smaller
+island (OPCs) where T/V are most of the cells.
+
+Then have 3 very distinact islands and a 4th slightly less distinct island.
+
+Inspect clusters on UMAP at both resolutions.
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so,
+  group.by = "RNA_snn_res.0.1",
+  label = TRUE
+  )
+p1
+p2 <- DimPlot_scCustom(
+  so,
+  group.by = "RNA_snn_res.0.2",
+  label = TRUE
+)
+p2
+```
+
+The resolution doesn't matter much for the 3 most distinct islands - 2,3,4
+(4/5/6 at 0.2).
+
+7/5 at 0.1, or 7/8 is the trickiest part.
+
+#### Inspect Res0.1 clusters with Pivot Tables
+
+Inspect the clusters with pivot tables.
+
+```{r}
+p1 <- propmap(
+  so,
+  group.by = "RNA_snn_res.0.1",
+  features = "orig.ident",
+  title = "RNA_snn_res.0.1 vs orig.ident"
+)
+p1
+p2 <- propmap(
+  so,
+  group.by = "RNA_snn_res.0.1",
+  features = "group",
+  title = "RNA_snn_res.0.1 vs group"
+)
+p2
+p3 <- propmap(
+  so,
+  group.by = "RNA_snn_res.0.1",
+  features = "dbl_class",
+  title = "RNA_snn_res.0.1 vs dbl_class"
+)
+p3
+p4 <- propmap(
+  so,
+  group.by = "RNA_snn_res.0.1",
+  features = "batch",
+  title = "RNA_snn_res.0.1 vs batch"
+)
+p4
+```
+
+cluster 8 has almost no Naive, but split across CPZ groups (but not V_1).
+Clusters 2 and 7 are most strongly doublets. 3 and 4 are more mixed. Then 8 and 5.
+
+#### Examine Clusters 0.1 Gene Expression
+
+Examine gene expression of clusters at the 0.1 resolution. Store some marker genes.
+
+```{r}
+genes_markers_ol <- c("Mbp", "Plp1", "Opalin")
+genes_markers_opc <- c("Pdgfra", "Cspg4", "Matn4")
+genes_markers_astro <- c("Gfap", "Aqp4", "Aldh1l1")
+genes_markers_micro <- c("Ptprc", "P2ry12", "Itgam")
+# genes_markers_neuro <- c("Snap25", "Syt1", "Eno2", "Syn1")
+
+genes_markers_all <- c(
+  genes_markers_ol,
+  genes_markers_opc,
+  genes_markers_astro,
+  genes_markers_micro
+)
+```
+
+Plot marker genes on Stacked VlnPlots.
+
+```{r}
+p1 <- Stacked_VlnPlot(
+  so,
+  features = c(genes_markers_ol),
+  group.by = "RNA_snn_res.0.1",
+)
+p1
+p2 <- Stacked_VlnPlot(
+  so,
+  features = c(genes_markers_opc),
+  group.by = "RNA_snn_res.0.1",
+)
+p2
+p3 <- Stacked_VlnPlot(
+  so,
+  features = c(genes_markers_astro),
+  group.by = "RNA_snn_res.0.1",
+)
+p3
+p4 <- Stacked_VlnPlot(
+  so,
+  features = c(genes_markers_micro),
+  group.by = "RNA_snn_res.0.1",
+)
+```
+
+OL: 0, 2, 3, 5, 6, 8.
+OPC: 1, 7, ~5 (MATN4)
+Astrocyte: 2,4,7
+Microglia: 3,4
+
+Conclusion:
+Doublets - 2,3,4,7
+OPCs - 1
+OL - 0, 6, 8
+Transition - 5
+
+Confirm these with a DotPlot
+
+```{r}
+p1 <- DotPlot_scCustom(
+  so,
+  features = c(
+    genes_markers_ol,
+    genes_markers_opc,
+    genes_markers_astro,
+    genes_markers_micro
+  ),
+  group.by = "RNA_snn_res.0.1",
+  x_lab_rotate = TRUE
+)
+p1
+```
+
+##### What about neurons?
+
+What about neurons? Some neuronal markers are highly expressed here but don't
+change much across the clusters. I think it's ambient RNA. In white matter
+tracts we're using to seeing myelin genes as the primary abmient RNA, but maybe
+when you include as much grey matter as we did here we get a lot more neuronal
+as well? This is consistent with other papers I've seen.
+
+Show neuron gene expression for the record:
+
+```{r}
+p1 <- Stacked_VlnPlot(
+  so,
+  features = c("Snap25", "Rbfox3", "Stmn2", "Syn1"),
+  group.by = "RNA_snn_res.0.1",
+)
+p1
+```
+
+Given the absence of NeuN, Stmn2, or Syn1 think it's safe to not worry about
+neuronal clusters here. I think we have so much neuronal nuclei in the dataset
+that the neuron doublets cluster with the neurons.
+
+## Cleaning OL - Rd3
+
+### Subset and clean Rd2
+
+Store the cluster information.
+
+```{r}
+so$clusters_rd2_res01 <- so$RNA_snn_res.0.1
+```
+
+Save to disk.
+
+```{r eval=FALSE}
+qs_save(
+  so,
+  "06_data_objects/pc190_03_so_rd2_oligos.qs2"
+)
+so <- qs_read(
+  "06_data_objects/pc190_03_so_rd2_oligos.qs2"
+)
+```
+
+Subset. We are keeping, 0,1,5,6,8.
+
+```{r}
+Idents(so) <- "RNA_snn_res.0.1"
+so_rd3 <- subset(
+  so,
+  idents = c("0", "1", "5", "6", "8")
+)
+so_rd3 <- JoinLayers(so_rd3)
+so_rd3 <- cleanSeurat_mds(
+  so_rd3,
+  removeClustering = TRUE,
+  clusteringPrefix = "RNA_snn_res."
+)
+so_rd3
+```
+Now have 57,075 nuclei.
+
+### Process Rd 3
+
+Again use the regular pipeline.
+
+```{r}
+so_rd3[["RNA"]] <- split(so_rd3[["RNA"]], f = so_rd3$orig.ident)
+so_rd3 <- NormalizeData(so_rd3)
+so_rd3 <- FindVariableFeatures(so_rd3)
+so_rd3 <- ScaleData(so_rd3)
+so_rd3 <- RunPCA(so_rd3)
+so_rd3 <- RunUMAP(so_rd3, dims = 1:25)
+so_rd3 <- RunTSNE(so_rd3, dims = 1:25)
+```
+
+#### Inspect UMAP Rd3
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so_rd3,
+  group.by = "group",
+  label = TRUE
+)
+p1
+p2 <- DimPlot_scCustom(
+  so_rd3,
+  group.by = "orig.ident",
+  label = FALSE
+)
+p2
+p3 <- DimPlot_scCustom(
+  so_rd3,
+  group.by = "dbl_class",
+  label = TRUE
+)
+p3
+```
+
+Largely the same shape as Rd2 with distinct islands. Still 1 though, in addition
+to the OPC to OL shapes.
+
+This was the case before, but N_3 is clustering quite distinctly in the OL,
+if we want to subcluster the OL we'll probably have to integrate on PPID?
+
+Inspect QC Metrics on the UMAP
+
+```{r}
+p1 <- FeaturePlot_scCustom(
+  so_rd3,
+  feature = "nFeature_RNA",
+  reduction = "umap"
+)
+p1
+p2 <- FeaturePlot_scCustom(
+  so_rd3,
+  feature = "nCount_RNA",
+  reduction = "umap"
+)
+p2
+p3 <- FeaturePlot_scCustom(
+  so_rd3,
+  feature = "percent_mito",
+  reduction = "umap"
+)
+p3
+```
+
+Overlal looks ok, definitely have a distinct area of high mitochondrial that
+we will have to remove.
+
+### Cluster Rd 3
+
+Cluster at resolution 0.1.
+
+```{r}
+so_rd3 <- FindNeighbors(so_rd3, dims = 1:25)
+so_rd3 <- FindClusters(so_rd3, resolution = 0.1)
+```
+Inspect the clusters.
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so_rd3,
+  group.by = "RNA_snn_res.0.1",
+  label = TRUE
+)
+p1
+```
+
+these are fairly distinct. What is cluster 4?
+
+```{r}
+markers_rd3_res01_c04 <- FindMarkers(
+  JoinLayers(so_rd3),
+  ident.1 = 4,
+  min.pct = 0.50,
+  logfc.threshold = 0.25
+) %>% Add_Pct_Diff()
+
+head(markers_rd3_res01_c04, n = 10)
+```
+
+They are microglia.
+
+What to do about the rest? I think we split the OPC and OL into different datasets
+for now, can put them back together later when they're cleaned up more.
+
+But what to do about the transition population?
+
+I think keep it out of both for now. It's 1270 cells. 0 is 41516. 1 is 7059. 2
+is 6799. WE have a lot more OL here than the others.
+
+## Cleaning OL - OL only Rd4
+
+Remove clusters 1,3, and 4.
+
+```{r}
+Idents(so_rd3) <- "RNA_snn_res.0.1"
+so_ol_rd4 <- subset(
+  so_rd3,
+  idents = c("0", "2")
+)
+so_ol_rd4 <- JoinLayers(so_ol_rd4)
+so_ol_rd4 <- cleanSeurat_mds(
+  so_ol_rd4,
+  removeClustering = TRUE,
+  clusteringPrefix = "RNA_snn_res."
+)
+so_ol_rd4
+```
+Now down to 48,315 cells.
+
+### Process OL Rd4
+
+```{r}
+so_ol_rd4[["RNA"]] <- split(so_ol_rd4[["RNA"]], f = so_ol_rd4$orig.ident)
+so_ol_rd4 <- NormalizeData(so_ol_rd4)
+so_ol_rd4 <- FindVariableFeatures(so_ol_rd4)
+so_ol_rd4 <- ScaleData(so_ol_rd4)
+so_ol_rd4 <- RunPCA(so_ol_rd4, reduction.name = "pca_log")
+so_ol_rd4 <- RunUMAP(so_ol_rd4,
+                     reduction = "pca_log",
+                     reduction.name = "umap_log",
+                     dims = 1:25)
+so_ol_rd4 <- RunTSNE(so_ol_rd4,
+                     reduction = "pca_log",
+                     reduction.name = "tsne_log",
+                     dims = 1:25)
+```
+
+Now also perform SCTransform for comparisons sake.
+
+```{r}
+so_ol_rd4 <- SCTransform(so_ol_rd4)
+so_ol_rd4 <- RunPCA(so_ol_rd4, reduction.name = "pca_sct")
+so_ol_rd4 <- RunUMAP(so_ol_rd4,
+                     reduction = "pca_sct",
+                     reduction.name = "umap_sct",
+                     dims = 1:25)
+so_ol_rd4 <- RunTSNE(so_ol_rd4,
+                     reduction = "pca_sct",
+                     reduction.name = "tsne_sct",
+                     dims = 1:25)
+```
+
+#### Inspect UMAP Rd4 - LogNorm
+
+Inspect the UMAP created from the LogNorm data.
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_log",
+  group.by = "group",
+  label = TRUE
+)
+p1
+p2 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_log",
+  group.by = "orig.ident",
+  label = FALSE
+)
+p2
+p3 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_log",
+  group.by = "dbl_class",
+  label = TRUE
+)
+p3
+```
+
+Inspect the UMAP created from the SCT data.
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "group",
+  label = TRUE
+)
+p1
+p2 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "orig.ident",
+  label = FALSE
+)
+p2
+p3 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "dbl_class",
+  label = TRUE
+)
+p3
+```
+
+The SCTransform, when done on a per sample basis, is doing a pretty good job
+of itnegrating V_3 on its own without further processing.
+
+Inspect QC metrics on the SCT UMAP
+
+```{r}
+p1 <- FeaturePlot_scCustom(
+  so_ol_rd4,
+  feature = "nFeature_RNA",
+  reduction = "umap_sct"
+)
+p1
+p2 <- FeaturePlot_scCustom(
+  so_ol_rd4,
+  feature = "nCount_RNA",
+  reduction = "umap_sct"
+)
+p2
+p3 <- FeaturePlot_scCustom(
+  so_ol_rd4,
+  feature = "percent_mito",
+  reduction = "umap_sct"
+)
+p3
+```
+
+
+#### Cluster Ol Rd4 - SCT
+
+Cluster the SCT data at resolution 0.1.
+
+```{r}
+so_ol_rd4 <- FindNeighbors(
+  so_ol_rd4,
+  reduction = "pca_sct",
+  dims = 1:25
+)
+so_ol_rd4 <- FindClusters(
+  so_ol_rd4,
+  resolution = seq(0.1:1, by = 0.1),
+  verbose = FALSE
+)
+```
+
+Inspect the SCT clustering at the 9 resolutions on SCT based UMAP
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.1",
+  label = TRUE
+)
+p1
+p2 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.2",
+  label = TRUE
+)
+p2
+p3 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.3",
+  label = TRUE
+)
+p3
+p4 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.4",
+  label = TRUE
+)
+p4
+p5 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.5",
+  label = TRUE
+)
+p5
+p6 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.6",
+  label = TRUE
+)
+p6
+p7 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.7",
+  label = TRUE
+)
+p7
+p8 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.8",
+  label = TRUE
+)
+p8
+p9 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.0.9",
+  label = TRUE
+)
+p9
+p10 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1",
+  label = TRUE
+)
+p10
+
+```
+
+The 0.1 reoslution actually seems to be doing a great job of capturing the high mito area. Inspect at that resolution using QC metrics.
+
+```{r}
+VlnPlot_scCustom(
+  so_ol_rd4,
+  features = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
+  group.by = "SCT_snn_res.0.1",
+  pt.size = 0
+)
+```
+
+Interesting that it's not very distinct for any other reason, but quite distinct
+for mitochondrial percentage and it's all of them. Do definitely drop that cluster.
+
+What about cluster 5 here? Does it have any distinct markers?
+
+```{r}
+DefaultAssay(so_ol_rd4) <- "RNA"
+Idents(so_ol_rd4) <- "SCT_snn_res.0.1"
+markers_ol_rd4_res01_c04 <- FindMarkers(
+  JoinLayers(so_ol_rd4),
+  ident.1 = "5",
+  min.pct = 0.5,
+  logfc.threshold = 0.5,
+  onlny.pos = TRUE
+) %>% Add_Pct_Diff()
+```
+
+How is it divided over the groups?
+
+```{r}
+p1 <- propmap(so_ol_rd4, group.by = "SCT_snn_res.0.1", features = "group")
+p2 <- propmap(so_ol_rd4, group.by = "SCT_snn_res.0.1", features = "orig.ident")
+p1
+p2
+```
+
+Sox6 definitely suggests this is still a developmental population. No PDGFRa so maybe a COP type population.
+
+## Session Info
+
+```{r}
+sessionInfo()
+```
+
