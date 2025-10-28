@@ -65,7 +65,8 @@ How many cells?
 so
 table(so$orig.ident)
 ```
-Starting with 65,304 cells. Definitely weighted twoards naive, particularly N3.
+
+Starting with 65,304 cells. Definitely weighted towards naive, particularly N3.
 
 ## Process Oligo Lineage Rd2
 
@@ -448,7 +449,17 @@ so_ol_rd4
 ```
 Now down to 48,315 cells.
 
+### MAD based thresholding
+
+
+
 ### Process OL Rd4
+
+
+
+
+
+#### P
 
 ```{r}
 so_ol_rd4[["RNA"]] <- split(so_ol_rd4[["RNA"]], f = so_ol_rd4$orig.ident)
@@ -538,6 +549,9 @@ p3
 The SCTransform, when done on a per sample basis, is doing a pretty good job
 of itnegrating V_3 on its own without further processing.
 
+There's also shape to the UMAP that isn't present in the LogNorm data. There's
+some seperating islands, that particularly enrich for the Naive condition.
+
 Inspect QC metrics on the SCT UMAP
 
 ```{r}
@@ -561,10 +575,34 @@ p3 <- FeaturePlot_scCustom(
 p3
 ```
 
+Inspec them on the LogNorm map too for comparisons sake.
+
+```{r}
+p1 <- FeaturePlot_scCustom(
+  so_ol_rd4,
+  feature = "nFeature_RNA",
+  reduction = "umap_log"
+)
+p1
+p2 <- FeaturePlot_scCustom(
+  so_ol_rd4,
+  feature = "nCount_RNA",
+  reduction = "umap_log"
+)
+p2
+p3 <- FeaturePlot_scCustom(
+  so_ol_rd4,
+  feature = "percent_mito",
+  reduction = "umap_log"
+)
+p3
+```
+
+
 
 #### Cluster Ol Rd4 - SCT
 
-Cluster the SCT data at resolution 0.1.
+Cluster the SCT data at resolution 0.1 - 1.
 
 ```{r}
 so_ol_rd4 <- FindNeighbors(
@@ -655,44 +693,229 @@ p10
 
 ```
 
-The 0.1 reoslution actually seems to be doing a great job of capturing the high mito area. Inspect at that resolution using QC metrics.
+We obviously have a small set of cells that have very high mito percentages. It
+seperates out as cluster at 0.1, but then becomes part of the bigger adjacent
+cluster until 0.9 when it seperates out again as 18, maintained as 1.0.
+
+For now use resolution 0.9.
+
+Do the same thing as above but for the TSNE. Only look at resolution 0.1, 0.2,
+0.7, 0.8, 0.9.
 
 ```{r}
-VlnPlot_scCustom(
+p1 <- DimPlot_scCustom(
   so_ol_rd4,
-  features = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
+  reduction = "tsne_sct",
   group.by = "SCT_snn_res.0.1",
-  pt.size = 0
+  label = TRUE
 )
+p1
+p2 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.0.2",
+  label = TRUE
+)
+p2
+p3 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.0.7",
+  label = TRUE
+)
+p3
+p4 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.0.8",
+  label = TRUE
+)
+p4
+p5 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.0.9",
+  label = TRUE
+)
+p5
+p6 <- DimPlot_scCustom(
+  so_ol_rd4,
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1",
+  label = TRUE
+)
+p6
+
 ```
 
-Interesting that it's not very distinct for any other reason, but quite distinct
-for mitochondrial percentage and it's all of them. Do definitely drop that cluster.
+Use the 1.0 resolution. 
 
-What about cluster 5 here? Does it have any distinct markers?
+Inspect the clusters at this resolution for QC metrics.
+
+```{r}
+p1 <- VlnPlot_scCustom(
+  so_ol_rd4,
+  features = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
+  group.by = "SCT_snn_res.1",
+  pt.size = 0,
+  num_columns = 3
+)
+p1
+```
+
+How big are these clusters?
+
+```{r}
+table(so_ol_rd4$SCT_snn_res.1)
+```
+
+How are the clusters made up by metadata variables?
+
+```{r}
+p1 <- propmap(
+  so_ol_rd4,
+  group.by = "SCT_snn_res.1",
+  features = "group",
+  title = "Res1 x Group")
+p1
+p2 <- propmap(
+  so_ol_rd4,
+  group.by = "SCT_snn_res.1",
+  features = "orig.ident",
+  title = "Res1 x Orig.Ident"
+)
+p2
+p3 <- propmap(
+  so_ol_rd4,
+  group.by = "SCT_snn_res.1",
+  features = "batch",
+  title = "Res1 x Batch"
+)
+p3
+p4 <- propmap(
+  so_ol_rd4,
+  group.by = "SCT_snn_res.1",
+  features = "dbl_class",
+  title = "Res1 x Dbl_Class"
+)
+p4
+```
+
+Overall enrichment in Naive, but depleted in 6, 11, 16, 17, 19.
+6 is a little more enriched in T than V? (overall T is 26%, V is 24%). This is
+driven by T_2 and T_4.
+Batches don't look too bad. 13 is enriched in 13, also cluster 19.
+18 and 19 are the two clusters enriched in doublets (20-30%).
+
+##### Rd4 High Mito Cluster - res1 cluster 18
+
+Cluster 18 is 282 cells and obviously high mitochondrial, exclude in subsequent
+steps.
+
+##### Rd4 COP - res1 cluster 19
+
+What about cluster 19 here? It's quite distinct on the UMAP. Only 152 cells.
 
 ```{r}
 DefaultAssay(so_ol_rd4) <- "RNA"
-Idents(so_ol_rd4) <- "SCT_snn_res.0.1"
-markers_ol_rd4_res01_c04 <- FindMarkers(
+Idents(so_ol_rd4) <- "SCT_snn_res.1"
+markers_ol_rd4_res10_c19 <- FindMarkers(
   JoinLayers(so_ol_rd4),
-  ident.1 = "5",
+  ident.1 = "19",
   min.pct = 0.5,
   logfc.threshold = 0.5,
   onlny.pos = TRUE
 ) %>% Add_Pct_Diff()
+head(markers_ol_rd4_res10_c19, n = 10)
 ```
 
-How is it divided over the groups?
+Plot expression of top 4 markers.
 
 ```{r}
-p1 <- propmap(so_ol_rd4, group.by = "SCT_snn_res.0.1", features = "group")
-p2 <- propmap(so_ol_rd4, group.by = "SCT_snn_res.0.1", features = "orig.ident")
+p1 <- VlnPlot_scCustom(
+  so_ol_rd4,
+  features = rownames(markers_ol_rd4_res10_c19)[1:4],
+  num_columns = 2,
+  pt.size = 0
+)
 p1
+```
+
+Note from above pivot tables this was enriched in CPZ conditions as well.
+
+##### Rd4 High Library Size - NFOL
+
+11 and 17 both have much alrger library sizes than all the other clusters. 1902
++ 292 cells. These split from 1 cluster at resolution 0.8.
+
+How do these look on the dim reductions?
+
+```{r}
+p1 <- Cluster_Highlight_Plot(
+  so_ol_rd4,
+  cluster_name = c("11", "17"),
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1",
+)
+p1
+p2 <- Cluster_Highlight_Plot(
+  so_ol_rd4,
+  cluster_name = c("11", "17"),
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1",
+)
 p2
 ```
 
-Sox6 definitely suggests this is still a developmental population. No PDGFRa so maybe a COP type population.
+
+Find markers for these two clusters together vs the rest.
+
+```{r}
+Idents(so_ol_rd4) <- "SCT_snn_res.1"
+DefaultAssay(so_ol_rd4) <- "RNA"
+markers_ol_rd4_res10_c11_17 <- FindMarkers(
+  JoinLayers(so_ol_rd4),
+  ident.1 = c("11", "17"),
+  min.pct = 0.5,
+  logfc.threshold = 0.5,
+  only.pos = TRUE
+) %>% Add_Pct_Diff()
+head(markers_ol_rd4_res10_c11_17, n = 10)
+```
+
+Man1a and Synpr both point to NFOL. Kind of makes sense with where they are in
+the plots. I bet in so_rd3 they will be where the transition connects.
+
+```{r}
+p1 <- DimPlot(
+    so_rd3,
+    cells.highlight = WhichCells(
+      object = so_ol_rd4,
+      idents = c("11", "17")
+    )
+  )
+p1
+```
+
+Plot exression of a few markers as well.
+
+```{r}
+p1 <- VlnPlot_scCustom(
+  so_ol_rd4,
+  features = rownames(markers_ol_rd4_res10_c11_17)[1:4],
+  num_columns = 2,
+  pt.size = 0
+)
+p1
+```
+
+##### Rd4
+
+None of the clusters look problematic by any of these metrics so far at least.
+
+Should we drop doublets? Or low library 
+
+
 
 ## Session Info
 
