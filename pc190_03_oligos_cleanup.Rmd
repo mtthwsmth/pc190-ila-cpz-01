@@ -28,10 +28,11 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(tidyverse)
 library(qs2)
-library(Seurat)
-library(scCustomize)
+library(scuttle)
 library(clustree)
 library(patchwork)
+library(Seurat)
+library(scCustomize)
 source("mds_scRNAseq_functions.R")
 ```
 
@@ -225,6 +226,7 @@ p4 <- Stacked_VlnPlot(
   features = c(genes_markers_micro),
   group.by = "RNA_snn_res.0.1",
 )
+p4
 ```
 
 OL: 0, 2, 3, 5, 6, 8.
@@ -316,6 +318,7 @@ so_rd3 <- cleanSeurat_mds(
 )
 so_rd3
 ```
+
 Now have 57,075 nuclei.
 
 ### Process Rd 3
@@ -384,7 +387,7 @@ p3 <- FeaturePlot_scCustom(
 p3
 ```
 
-Overlal looks ok, definitely have a distinct area of high mitochondrial that
+Overall looks ok, definitely have a distinct area of high mitochondrial that
 we will have to remove.
 
 ### Cluster Rd 3
@@ -451,15 +454,84 @@ Now down to 48,315 cells.
 
 ### MAD based thresholding
 
+Calculate thresholds based on MAD for nFeature_RNA, nCount_RNA, percent_mito.
+
+```{r}
+outliers_ol <- perCellQCFilters(
+  x = DataFrame(so_ol_rd4@meta.data),
+  sum.field = "nCount_RNA",
+  detected.field = "nFeature_RNA",
+  sub.fields = "percent_mito",
+  batch = so_ol_rd4$orig.ident
+)
+
+rownames(outliers_ol) <- colnames(so_ol_rd4)
+
+so_ol_rd4 <- AddMetaData(
+  so_ol_rd4,
+  metadata = as.data.frame(outliers_ol),
+  col.name = c("low_lib_size", "low_n_features", "high_percent_mito", "discard")
+)
+```
+
+#### Make a pivot table per sample
+
+```{r}
+qc_cols <- c("low_lib_size", "low_n_features", "high_percent_mito", "discard")
+pivot_summary_ol <- so_ol_rd4@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(
+    # counts for each QC flag
+    across(all_of(qc_cols), ~ sum(.x, na.rm = TRUE), .names = "n_{.col}"),
+    # proportions for each QC flag
+    across(all_of(qc_cols),
+           ~ round(mean(.x, na.rm = TRUE)*100, 1), .names = "prop_{.col}"),
+    # combo: (low_lib_size OR low_n_features) AND high_percent_mito
+    n_lib_and_mito   = sum((low_lib_size | low_n_features) & high_percent_mito, na.rm = TRUE),
+    prop_lib_and_mito = round(
+      mean(
+        (low_lib_size | low_n_features) & high_percent_mito, na.rm = TRUE
+        ) * 100, 1
+      ),
+    .groups = "drop"
+  )
+pivot_summary_ol
+```
+
+#### Inspect MAD based thresholding per sample on each QC metric.
+
+```{r}
+p1 <- plotSeuratColData(
+  so_ol_rd4,
+  x = "orig.ident",
+  y = "nFeature_RNA",
+  colour_by = "discard",
+)
+p1
+p2 <- plotSeuratColData(
+  so_ol_rd4,
+  x = "orig.ident",
+  y = "nCount_RNA",
+  colour_by = "discard",
+)
+p2
+p3 <- plotSeuratColData(
+  so_ol_rd4,
+  x = "orig.ident",
+  y = "percent_mito",
+  colour_by = "discard",
+) + scale_y_continuous(trans = "log1p") +
+  geom_hline(yintercept = 1, color = "red")
+p3 
+```
+
 
 
 ### Process OL Rd4
 
+Now use two pipelines and compare the results - LogNorm and SCTransform.
 
-
-
-
-#### P
+#### Seurat LogNorm OL Rd4
 
 ```{r}
 so_ol_rd4[["RNA"]] <- split(so_ol_rd4[["RNA"]], f = so_ol_rd4$orig.ident)
@@ -477,6 +549,8 @@ so_ol_rd4 <- RunTSNE(so_ol_rd4,
                      dims = 1:25)
 ```
 
+#### Seurat SCTransform OL Rd4
+
 Now also perform SCTransform for comparisons sake.
 
 ```{r}
@@ -492,7 +566,7 @@ so_ol_rd4 <- RunTSNE(so_ol_rd4,
                      dims = 1:25)
 ```
 
-#### Inspect UMAP Rd4 - LogNorm
+#### Inspect UMAP Rd4 - LogNorm vs SCTransform
 
 Inspect the UMAP created from the LogNorm data.
 
@@ -750,18 +824,44 @@ p6
 
 Use the 1.0 resolution. 
 
-Inspect the clusters at this resolution for QC metrics.
+Inspect the clusters at this resolution for QC metrics. Colour by MAD based
+threhsolding.
 
 ```{r}
-p1 <- VlnPlot_scCustom(
+p1 <- plotSeuratColData(
   so_ol_rd4,
-  features = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
-  group.by = "SCT_snn_res.1",
-  pt.size = 0,
-  num_columns = 3
-)
+  x = "SCT_snn_res.1",
+  y = "percent_mito",
+  colour_by = "discard",
+) + scale_y_continuous(trans = "log1p") + geom_hline(yintercept = 1, color = "red")
 p1
+p2 <- plotSeuratColData(
+  so_ol_rd4,
+  x = "SCT_snn_res.1",
+  y = "nFeature_RNA",
+  colour_by = "discard",
+)
+p2
+p3 <- plotSeuratColData(
+  so_ol_rd4,
+  x = "SCT_snn_res.1",
+  y = "nCount_RNA",
+  colour_by = "discard",
+)
+p3
+p4 <- plotSeuratColData(
+  so_ol_rd4,
+  x = "SCT_snn_res.1",
+  y = "nFeature_RNA",
+  colour_by = "dbl_class",
+)
+p4
 ```
+Cluster 18 is quite distinct and easy discard on mitochondrial percentages.
+What bout cluster 7 though? It's not nearly as high, but still almost 100%
+outisde MAD based mito_percent thresholding.
+
+It's also a lot of cells - 2650.
 
 How big are these clusters?
 
@@ -811,6 +911,61 @@ Batches don't look too bad. 13 is enriched in 13, also cluster 19.
 
 Cluster 18 is 282 cells and obviously high mitochondrial, exclude in subsequent
 steps.
+
+##### Rd4 Mid Mito Cluster - res1 cluster 7
+
+Cluster 7 gets almost entirely labeled as MAD outlier based on percent_mito
+
+It's not wildly high though like cluster 18 is. It's around 1%, some above, some
+below.
+
+Where is it on the dim reductions?
+
+```{r}
+p1 <- Cluster_Highlight_Plot(
+  so_ol_rd4,
+  cluster_name = "7",
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1",
+)
+p1
+p2 <- Cluster_Highlight_Plot(
+  so_ol_rd4,
+  cluster_name = "7",
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1",
+)
+p2
+```
+
+So before discarding it, check it for markers.
+
+```{r}
+DefaultAssay(so_ol_rd4) <- "RNA"
+markers_ol_rd4_res01_c07 <- FindMarkers(
+  JoinLayers(so_ol_rd4),
+  ident.1 = "7",
+  min.pct = 0.5,
+  logfc.threshold = 0.5,
+  only.pos = TRUE
+) %>% Add_Pct_Diff()
+
+head(markers_ol_rd4_res01_c07, n = 10)
+```
+It has only 6 markers, and they are all mitochondrial genes. 
+
+How many nuclei that are not in cluster 7 or 18 are still discards based on MADs?
+
+```{r}
+sum(
+  so_ol_rd4$discard &
+    !(so_ol_rd4$SCT_snn_res.1 %in% c("7", "18"))
+)
+```
+
+Out of 5601, 2901 (51%) are in clusters 7 and 18.
+
+Discard. cluster 7.
 
 ##### Rd4 COP - res1 cluster 19
 
@@ -867,7 +1022,6 @@ p2 <- Cluster_Highlight_Plot(
 p2
 ```
 
-
 Find markers for these two clusters together vs the rest.
 
 ```{r}
@@ -909,12 +1063,401 @@ p1 <- VlnPlot_scCustom(
 p1
 ```
 
-##### Rd4
+#### Rd4 Non-Cluster Based Discards - MAD and Dbl
+
+We have two low quality clusters - 7 and 18 (based on Mito). We have a cluster
+of cells that look more like OPCs - cluster 19. Discard those 3 clusters. How
+many is that?
+
+```{r}
+sum(so_ol_rd4$SCT_snn_res.1 %in% c("7", "18", "19"))
+```
+
+
+We'll keep the NFOL clusters.
+
+Now, should we discard cells based on MADs or doublet classification regardless
+of clusters?
+
+How many would that be?
+
+```{r}
+sum(
+  ( so_ol_rd4$discard |
+    so_ol_rd4$dbl_class == "Doublet" ) &
+    !(so_ol_rd4$SCT_snn_res.1 %in% c("7", "18", "19"))
+)
+```
+
+In this rd we're starting with 48315 nuclei.
+Discard 3084 based on clustering (6%)
+Discard another 2690 basd on algorithmic detection (6%)
+
+So discarding 12% total.
+
+Inspect where these show up on the dim reductions.
+
+```{r}
+cells_rd4_algo_discard <- WhichCells(
+  so_ol_rd4,
+  expression = ( discard | dbl_class == "Doublet" ) &
+    !(SCT_snn_res.1 %in% c("7", "18", "19"))
+)
+p1 <- DimPlot(
+  so_ol_rd4,
+  cells.highlight = list("Algo Discard" = cells_rd4_algo_discard),
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1"
+) + ggtitle("UMAP SCT Algorithmic Discards")
+p1
+p2 <- DimPlot(
+  so_ol_rd4,
+  cells.highlight = list("Algo Discard" = cells_rd4_algo_discard),
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1"
+) + ggtitle("TSNE SCT Algorithmic Discards")
+p2
+```
+
+sum()
 
 None of the clusters look problematic by any of these metrics so far at least.
 
 Should we drop doublets? Or low library 
 
+## Save Cleaned OL Object
+
+Subset out the discarded cells.
+
+```{r}
+Idents(so_ol_rd4) <- "SCT_snn_res.1"
+so_ol_rd4$clusters_rd4_sct_res1 <- so_ol_rd4$SCT_snn_res.1
+so_ol_cleaned <- subset(
+  so_ol_rd4,
+  subset = !(SCT_snn_res.1 %in% c("7", "18", "19")) &
+    !discard &
+    dbl_class != "Doublet"
+)
+so_ol_cleaned <- JoinLayers(so_ol_cleaned)
+so_ol_cleaned <- cleanSeurat_mds(
+  so_ol_cleaned,
+  removeClustering = TRUE,
+  clusteringPrefix = "SCT_snn_res"
+)
+so_ol_cleaned
+# we still have some RNA clusters from point, remove those
+so_ol_cleaned@meta.data[
+  ,
+  grepl(pattern = "^RNA_snn_res", x = colnames(so_ol_cleaned@meta.data))
+] <- NULL
+```
+
+Save the so and the cells to disk.
+
+```{r eval=FALSE}
+qs_save(
+  so_ol_cleaned,
+  "06_data_objects/pc190_03_so_oligos_cleaned.qs2"
+)
+saveRDS(
+  colnames(so_ol_cleaned),
+  file = "06_data_objects/pc190_cells_so_oligos_cleaned.rds"
+)
+```
+
+## Cleaning OPC Only - Rd4
+
+Also clean up the OPCs here. From Rd3, cluster 1 is OPCs, cluster 3 is
+transitioning?
+
+Plus, from ol_rd4, cluster 19 is COPs which I did not include in that analysis
+so I should include them ehre? Maybe?
+
+### Subset to putative OPCs Rd4
+
+Make a list of cells here.
+
+```{r}
+Idents(so_rd3) <- "RNA_snn_res.0.1"
+cells_opc_rd4_from_rd3 <- WhichCells(
+  so_rd3,
+  idents = c("1", "3")
+)
+Idents(so_ol_rd4) <- "SCT_snn_res.1"
+cells_opc_rd4_from_rd4 <- WhichCells(
+  so_ol_rd4,
+  idents = "19"
+)
+```
+
+Now subset the Rd3 object. I also forgot to store the Rd3 clusters for the OL
+but do that here.
+
+```{r}
+so_rd3$clusters_rd3_res01 <- so_rd3$RNA_snn_res.0.1
+so_opc_rd4 <- subset(
+  so_rd3,
+  cells = c(cells_opc_rd4_from_rd3, cells_opc_rd4_from_rd4)
+)
+so_opc_rd4 <- JoinLayers(so_opc_rd4)
+so_opc_rd4 <- cleanSeurat_mds(
+  so_opc_rd4,
+  removeClustering = TRUE,
+  clusteringPrefix = "RNA_snn_res."
+)
+so_opc_rd4
+```
+
+### MAD based threshopcding
+
+Calculate threshopcds based on MAD for nFeature_RNA, nCount_RNA, percent_mito.
+
+I'm not 100% sure MADs should be calculated yet. If the OPC vs transitioning
+are very distinct might want to reconsider.
+
+```{r}
+outliers_opc <- perCellQCFilters(
+  x = DataFrame(so_opc_rd4@meta.data),
+  sum.field = "nCount_RNA",
+  detected.field = "nFeature_RNA",
+  sub.fields = "percent_mito",
+  batch = so_opc_rd4$orig.ident
+)
+
+rownames(outliers_opc) <- colnames(so_opc_rd4)
+
+so_opc_rd4 <- AddMetaData(
+  so_opc_rd4,
+  metadata = as.data.frame(outliers_opc),
+  col.name = c("low_lib_size", "low_n_features", "high_percent_mito", "discard")
+)
+```
+
+#### Make a pivot table per sample
+
+```{r}
+qc_cols <- c("low_lib_size", "low_n_features", "high_percent_mito", "discard")
+pivot_summary_opc <- so_opc_rd4@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(
+    # counts for each QC flag
+    across(all_of(qc_cols), ~ sum(.x, na.rm = TRUE), .names = "n_{.col}"),
+    # proportions for each QC flag
+    across(all_of(qc_cols),
+           ~ round(mean(.x, na.rm = TRUE)*100, 1), .names = "prop_{.col}"),
+    # combo: (low_lib_size OR low_n_features) AND high_percent_mito
+    n_lib_and_mito   = sum((low_lib_size | low_n_features) & high_percent_mito, na.rm = TRUE),
+    prop_lib_and_mito = round(
+      mean(
+        (low_lib_size | low_n_features) & high_percent_mito, na.rm = TRUE
+        ) * 100, 1
+      ),
+    .groups = "drop"
+  )
+pivot_summary_opc
+```
+
+
+#### Inspect MAD based threshopcding per sample on each QC metric.
+
+```{r}
+p1 <- plotSeuratColData(
+  so_opc_rd4,
+  x = "orig.ident",
+  y = "nFeature_RNA",
+  colour_by =  "discard",
+)
+p1
+p2 <- plotSeuratColData(
+  so_opc_rd4,
+  x = "orig.ident",
+  y = "nCount_RNA",
+  colour_by = "discard",
+)
+p2
+p3 <- plotSeuratColData(
+  so_opc_rd4,
+  x = "orig.ident",
+  y = "percent_mito",
+  colour_by = "discard",
+) + scale_y_continuous(trans = "log1p") +
+  geom_hline(yintercept = 1, color = "red")
+p3 
+```
+Once again mitochondrial is the main driver of discards. 
+
+### Process OPC Rd 4
+
+I really liked the SCT in the OL, so do it again here LogNorm vs SCT.
+
+Below is a copy paste from OL Rd4, with OL swapped to OPC
+
+#### Seurat LogNorm opc Rd4
+
+```{r}
+so_opc_rd4[["RNA"]] <- split(so_opc_rd4[["RNA"]], f = so_opc_rd4$orig.ident)
+so_opc_rd4 <- NormalizeData(so_opc_rd4)
+so_opc_rd4 <- FindVariableFeatures(so_opc_rd4)
+so_opc_rd4 <- ScaleData(so_opc_rd4)
+so_opc_rd4 <- RunPCA(so_opc_rd4, reduction.name = "pca_log")
+so_opc_rd4 <- RunUMAP(so_opc_rd4,
+                     reduction = "pca_log",
+                     reduction.name = "umap_log",
+                     dims = 1:25)
+so_opc_rd4 <- RunTSNE(so_opc_rd4,
+                     reduction = "pca_log",
+                     reduction.name = "tsne_log",
+                     dims = 1:25)
+```
+
+#### Seurat SCTransform opc Rd4
+
+Now also perform SCTransform for comparisons sake.
+
+```{r}
+so_opc_rd4 <- SCTransform(so_opc_rd4)
+so_opc_rd4 <- RunPCA(so_opc_rd4, reduction.name = "pca_sct")
+so_opc_rd4 <- RunUMAP(so_opc_rd4,
+                     reduction = "pca_sct",
+                     reduction.name = "umap_sct",
+                     dims = 1:25)
+so_opc_rd4 <- RunTSNE(so_opc_rd4,
+                     reduction = "pca_sct",
+                     reduction.name = "tsne_sct",
+                     dims = 1:25)
+```
+
+#### Inspect UMAP Rd4 - LogNorm vs SCTransform
+
+Inspect the UMAP created from the LogNorm data.
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_log",
+  group.by = "group",
+  label = TRUE
+)
+p1
+p2 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_log",
+  group.by = "orig.ident",
+  label = FALSE
+)
+p2
+p3 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_log",
+  group.by = "dbl_class",
+  label = TRUE
+)
+p3
+p4 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_log",
+  group.by = "clusters_rd3_res01",
+  label = TRUE
+)
+p4
+```
+
+Inspect the UMAP created from the SCT data.
+
+```{r}
+p1 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_sct",
+  group.by = "group",
+  label = TRUE
+)
+p1
+p2 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_sct",
+  group.by = "orig.ident",
+  label = FALSE
+)
+p2
+p3 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_sct",
+  group.by = "dbl_class",
+  label = TRUE
+)
+p3
+p4 <- DimPlot_scCustom(
+  so_opc_rd4,
+  reduction = "umap_sct",
+  group.by = "clusters_rd3_res01",
+  label = TRUE
+)
+p4
+```
+
+Inspect QC metrics on the SCT UMAP
+
+```{r}
+p1 <- FeaturePlot_scCustom(
+  so_opc_rd4,
+  feature = "nFeature_RNA",
+  reduction = "umap_sct"
+)
+p1
+p2 <- FeaturePlot_scCustom(
+  so_opc_rd4,
+  feature = "nCount_RNA",
+  reduction = "umap_sct"
+)
+p2
+p3 <- FeaturePlot_scCustom(
+  so_opc_rd4,
+  feature = "percent_mito",
+  reduction = "umap_sct"
+)
+p3
+
+```
+
+Inspec them on the LogNorm map too for comparisons sake.
+
+```{r}
+p1 <- FeaturePlot_scCustom(
+  so_opc_rd4,
+  feature = "nFeature_RNA",
+  reduction = "umap_log"
+)
+p1
+p2 <- FeaturePlot_scCustom(
+  so_opc_rd4,
+  feature = "nCount_RNA",
+  reduction = "umap_log"
+)
+p2
+p3 <- FeaturePlot_scCustom(
+  so_opc_rd4,
+  feature = "percent_mito",
+  reduction = "umap_log"
+)
+p3
+
+```
+**Overall takeaways:**
+SCT isn't doing much different here than LogNorm, N_3 seperates out a lot less
+than it did in the OL.
+
+We are pulling out a cluster of doublets from the original OPC cluster in Rd3
+(cluster1).
+
+That is where all of OL_Rd4 "COPs" are ending up though...which isn't that
+surprising I guess. I think this group of cells, only ~150, we're going to drop,
+they don't fit in with the OLs or the OPCs.
+
+
+What about teh transitioning cells? Cluster 3. Seperates out quite cleanly...
+
+
+First confirm the doublet population is to be discarded.
 
 
 ## Session Info
