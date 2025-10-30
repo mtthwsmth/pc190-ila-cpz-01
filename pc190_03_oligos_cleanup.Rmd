@@ -44,6 +44,22 @@ options(future.globals.maxSize = 30000*1024^2) # 30 GB
 
 ### Data Shortcut
 
+```{r eval=FALSE}
+so <- qs_read(
+  "06_data_objects/pc190_03_so_rd2_oligos.qs2"
+)
+so_rd3 <- qs_read(
+  "06_data_objects/pc190_03_so_rd3_oligos.qs2"
+)
+so_ol_rd4 <- qs_read(
+  "06_data_objects/pc190_03_so_rd4_oligos.qs2"
+)
+so_opc_rd4 <- qs_read(
+  "06_data_objects/pc190_03_so_rd4_opcs.qs2"
+)
+```
+
+
 ## Cleaning OL - Rd2
 
 I'm calling the subsetting Rd1. So first round cleaning is Rd2.
@@ -431,6 +447,16 @@ But what to do about the transition population?
 
 I think keep it out of both for now. It's 1270 cells. 0 is 41516. 1 is 7059. 2
 is 6799. WE have a lot more OL here than the others.
+
+Save this object to disk.
+
+```{r eval=FALSE}
+qs_save(
+  so_rd3,
+  "06_data_objects/pc190_03_so_rd3_oligos.qs2"
+)
+```
+
 
 ## Cleaning OL - OL only Rd4
 
@@ -1125,6 +1151,16 @@ None of the clusters look problematic by any of these metrics so far at least.
 
 Should we drop doublets? Or low library 
 
+Save this object to disk.
+
+```{r eval=FALSE}
+qs_save(
+  so_ol_rd4,
+  "06_data_objects/pc190_03_so_oligos_rd4.qs2"
+)
+```
+
+
 ## Save Cleaned OL Object
 
 Subset out the discarded cells.
@@ -1458,6 +1494,383 @@ What about teh transitioning cells? Cluster 3. Seperates out quite cleanly...
 
 
 First confirm the doublet population is to be discarded.
+
+#### Cluster OPC Rd4 - SCT
+
+```{r}
+so_opc_rd4 <- FindNeighbors(
+  so_opc_rd4,
+  reduction = "pca_sct",
+  dims = 1:25
+)
+so_opc_rd4 <- FindClusters(
+  so_opc_rd4,
+  resolution = seq(0.1:1, by = 0.1),
+  verbose = FALSE
+)
+```
+
+Inspect the clusters on the SCT based UMAP.
+
+With clustree
+
+```{r}
+p1 <- clustree(so_opc_rd4, prefix = "SCT_snn_res.")
+p1
+```
+
+
+```{r}
+p.list <- lapply(
+  X = paste0("SCT_snn_res.", seq(0.1, 1, by = 0.1)),
+  FUN = function(resolution) {
+    DimPlot_scCustom(
+      so_opc_rd4,
+      reduction = "umap_sct",
+      group.by = resolution,
+      label = TRUE
+    ) + ggtitle(paste("Resolution:", resolution))
+  }
+)
+p.list
+```
+The hight mito population, cluster 5 at res0.1, is distinct through res0.3.
+Then it joins with some other cells in that area (cluster 7 at res0.4) and it never
+seperates again. Is this a similar situation as the OL where there's a mid-MT
+and very-high MT, just this time the very-high MT isn'ts eperating out again.
+
+The doublet population becomes 4 distinct populations at res.0.8 which looks
+right on the UMAP.
+
+the main body of the OPCs, what is clusters 0/1/2 in most of the resolutions,
+is not well seperated at all on the UMAP.
+
+Inspect the resolutions 0.1, 0.4, 0.9, and 1 on the TSNE plot.
+
+```{r}
+p.list <- lapply(
+  X = c("SCT_snn_res.0.1", "SCT_snn_res.0.4", "SCT_snn_res.0.9", "SCT_snn_res.1"),
+  FUN = function(resolution) {
+    DimPlot_scCustom(
+      so_opc_rd4,
+      reduction = "tsne_sct",
+      group.by = resolution,
+      label = TRUE
+    ) + ggtitle(paste("Resolution:", resolution))
+  }
+)
+p.list
+```
+I think try the res1 for now. The other thing it does from res0.9 is split apart
+the transitioning from the main body a little more cleanly (although that's
+still a little unclear).
+
+How big are these clustesr at this resolution?
+
+```{r}
+table(so_opc_rd4$SCT_snn_res.1)
+```
+
+
+Inspect the res1 qc metrics with MAD based outliers called
+
+```{r}
+p1 <- plotSeuratColData(
+  so_opc_rd4,
+  x = "SCT_snn_res.1",
+  y = "percent_mito",
+  colour_by = "discard",
+) + scale_y_continuous(trans = "log1p") + geom_hline(yintercept = 1, color = "red")
+p1
+p2 <- plotSeuratColData(
+  so_opc_rd4,
+  x = "SCT_snn_res.1",
+  y = "nFeature_RNA",
+  colour_by = "discard"
+)
+p2
+p3 <- plotSeuratColData(
+  so_opc_rd4,
+  x = "SCT_snn_res.1",
+  y = "nCount_RNA",
+  colour_by = "discard"
+)
+p3
+p4 <- plotSeuratColData(
+  so_opc_rd4,
+  x = "SCT_snn_res.1",
+  y = "nFeature_RNA",
+  colour_by = "dbl_class"
+)
+p4
+```
+Cluster 10 is entirely MAD mito calls.
+Clusters 4 and 14 are mostly called doublets.
+
+Check how the clusters are made up across various metadata variables.
+
+```{r}
+p.list <- lapply(
+  X = c("group", "orig.ident", "batch", "dbl_class", "clusters_rd3_res01"),
+  FUN = function(feature) {
+    propmap(
+      so_opc_rd4,
+      group.by = "SCT_snn_res.1",
+      features = feature,
+      title = paste("Res1 x", feature)
+    )
+  }
+)
+p.list
+```
+Interesting that cluster 1 is all naive. That's a pretty major group.
+0 alternatively is all CPZ. Two sides of the same coin?
+
+4 is enriched for N, 5,6,8-12 all enriched for CPZ.
+
+13 which is the COP population from ol_rd4 is all in T/V.
+
+4 and 14 are doublet enriched. 4 is from cluster 1 in Rd3, 14 is from cluster 3.
+
+Inspect problem clusters
+
+##### Rd4 OPC Res1 - C10 - High Mito Cluster
+
+It's 272 nuclei.
+
+```{r}
+p1 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "10",
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1",
+)
+p1
+p2 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "10",
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1",
+)
+p2
+```
+It's spread int he TSNe is a little surprising. Check its markers, should be
+all mitochondrial.
+
+```{r}
+DefaultAssay(so_opc_rd4) <- "RNA"
+Idents(so_opc_rd4) <- "SCT_snn_res.1"
+markers_opc_rd4_res10_c10 <- FindMarkers(
+  JoinLayers(so_opc_rd4),
+  ident.1 = "10",
+  min.pct = 0.5,
+  logfc.threshold = 0.5,
+  only.pos = TRUE
+) %>% Add_Pct_Diff()
+head(markers_opc_rd4_res10_c10, n = 21)
+```
+
+The top 10 markers are mitochondrial genes and they're quite robustly
+upregulatd. 11 more genes after that, some interesting but nothing to suggest
+we should keept his.
+
+##### Rd4 OPC Res1 - C4 - Oligos
+
+cluster 4 is 686 nuclei.
+
+```{r}
+p1 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "4",
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1",
+)
+p1
+p2 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "4",
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1",
+)
+p2
+```
+Check Markers
+
+```{r}
+DefaultAssay(so_opc_rd4) <- "RNA"
+Idents(so_opc_rd4) <- "SCT_snn_res.1"
+markers_opc_rd4_res10_c4 <- FindMarkers(
+  JoinLayers(so_opc_rd4),
+  ident.1 = "4",
+  min.pct = 0.5,
+  logfc.threshold = 0.5,
+  only.pos = TRUE
+) %>% Add_Pct_Diff()
+head(markers_opc_rd4_res10_c4, n = 10)
+```
+
+These are OL contaminating cells (presumably doublets.)
+
+##### Rd4 OPC Res1 - C14 More Oligos
+
+```{r}
+p1 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "14",
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1",
+)
+p1
+p2 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "14",
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1",
+)
+p2
+```
+```{r}
+DefaultAssay(so_opc_rd4) <- "RNA"
+Idents(so_opc_rd4) <- "SCT_snn_res.1"
+markers_opc_rd4_res10_c14 <- FindMarkers(
+  JoinLayers(so_opc_rd4),
+  ident.1 = "14",
+  min.pct = 0.5,
+  logfc.threshold = 0.5,
+  only.pos = TRUE
+) %>% Add_Pct_Diff()
+head(markers_opc_rd4_res10_c14, n = 20)
+```
+
+these are also oligos. Aspa, Mobp, etc.
+
+##### Rd4 OPC Res 1 - C15 - Neurons
+
+
+```{r}
+p1 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "15",
+  reduction = "umap_sct",
+  group.by = "SCT_snn_res.1",
+)
+p1
+p2 <- Cluster_Highlight_Plot(
+  so_opc_rd4,
+  cluster_name = "15",
+  reduction = "tsne_sct",
+  group.by = "SCT_snn_res.1",
+)
+p2
+```
+```{r}
+DefaultAssay(so_opc_rd4) <- "RNA"
+Idents(so_opc_rd4) <- "SCT_snn_res.1"
+markers_opc_rd4_res10_c15 <- FindMarkers(
+  JoinLayers(so_opc_rd4),
+  ident.1 = "15",
+  min.pct = 0.5,
+  logfc.threshold = 0.5,
+  only.pos = TRUE
+) %>% Add_Pct_Diff()
+head(markers_opc_rd4_res10_c15, n = 20)
+```
+
+These are neurons.
+
+I already know cluster 13 is the COPs from the OL Rd4.
+
+#### Rd4 OPC Non-Cluster Based Discards - MAD and Dbl
+
+We are going to drop 10,4,15,14,13.
+
+How many is that?
+
+```{r}
+sum(so_opc_rd4$SCT_snn_res.1 %in% c("10", "4", "15", "14", "13"))
+```
+
+1203.
+
+How many more if we drop discard and doublets not in those clusters?
+
+```{r}
+sum(
+  ( so_opc_rd4$discard |
+    so_opc_rd4$dbl_class == "Doublet" ) &
+    !(so_opc_rd4$SCT_snn_res.1 %in% c("10", "4", "15", "14", "13"))
+)
+```
+
+Another 405.
+
+Inspect where these are on the dim reductions.
+
+```{r}
+cells_opc_rd4_algo_discard <- WhichCells(
+  so_opc_rd4,
+  expression = ( discard | dbl_class == "Doublet" ) &
+    !(SCT_snn_res.1 %in% c("10", "4", "15", "14", "13"))
+)
+p1 <- DimPlot(
+  so_opc_rd4,
+  cells.highlight = list("Algo Discard" = cells_opc_rd4_algo_discard),
+  reduction = "umap_sct",
+) + ggtitle("UMAP SCT Algorithmic Discards")
+p1
+p2 <- DimPlot(
+  so_opc_rd4,
+  cells.highlight = list("Algo Discard" = cells_opc_rd4_algo_discard),
+  reduction = "tsne_sct",
+) + ggtitle("TSNE SCT Algorithmic Discards")
+p2
+```
+Save this object to disk.
+
+```{r eval=FALSE}
+qs_save(
+  so_opc_rd4,
+  "06_data_objects/pc190_03_so_opcs_rd4_precleaned.qs2"
+)
+```
+
+
+
+## Save Cleaned OPC Object
+
+Subset out the discarded cells.
+
+```{r}
+Idents(so_opc_rd4) <- "SCT_snn_res.1"
+so_opc_rd4$clusters_rd4_sct_res1 <- so_opc_rd4$SCT_snn_res.1
+so_opc_cleaned <- subset(
+  so_opc_rd4,
+  subset = !(SCT_snn_res.1 %in% c("10", "4", "15", "14", "13")) &
+    !discard &
+    dbl_class != "Doublet"
+)
+so_opc_cleaned <- JoinLayers(so_opc_cleaned)
+so_opc_cleaned <- cleanSeurat_mds(
+  so_opc_cleaned,
+  removeClustering = TRUE,
+  clusteringPrefix = "SCT_snn_res"
+)
+so_opc_cleaned
+```
+Have 6873 nuclei for the later analysis.
+
+Save the so and the cells to disk.
+
+```{r eval=FALSE}
+qs_save(
+  so_opc_cleaned,
+  "06_data_objects/pc190_03_so_opcs_cleaned.qs2"
+)
+saveRDS(
+  colnames(so_opc_cleaned),
+  file = "06_data_objects/pc190_cells_so_opcs_cleaned.rds"
+)
+```
 
 
 ## Session Info
