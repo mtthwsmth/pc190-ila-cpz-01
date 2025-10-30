@@ -1,0 +1,381 @@
+---
+title: "pc190_04_oligos_analysis"
+author: "Matthew Smith"
+date: "2025-10-29"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float:
+      collapsed: true
+      position: right
+    theme: united
+    df_print: kable
+knitr:
+  opts_chunk:
+    warning: false
+    message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+### Libraries
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(qs2)
+library(scuttle)
+library(clustree)
+library(Seurat)
+library(scCustomize)
+source("mds_scRNAseq_functions.R")
+```
+
+### Workspace
+
+```{r}
+options(future.globals.maxSize = 30000*1024^2) # 30 GB
+```
+
+### Data Shortcut
+
+## Process Cleaned Oligos
+
+### Load Cleaned Data
+
+```{r}
+so <- qs_read(
+  "06_data_objects/pc190_03_so_oligos_cleaned.qs2"
+)
+so
+```
+
+We are starting with 42541 cells.
+
+### Log Normalize Workflow
+
+```{r}
+so[["RNA"]] <- split(so[["RNA"]], f=so$orig.ident)
+so <- NormalizeData(so)
+```
+
+### SCTransform
+
+I know we have some seperation on a naive sample if we don't do something about
+it. Use SCTransform model per Sample rather than having to integrate.
+
+```{r}
+so <- SCTransform(so)
+so <- RunPCA(so)
+so <- RunUMAP(so, dims=1:25)
+so <- RunTSNE(so, dims=1:25)
+```
+
+#### Inspect DimPlots by Metadata Variables
+
+Inspect the UMAP plots
+
+```{r}
+p.list <- lapply(
+  X = c("orig.ident", "group", "batch"),
+  FUN = function(var){
+    DimPlot_scCustom(
+      so,
+      reduction = "umap",
+      group.by = var,
+      label = FALSE
+    )
+  }
+)
+p.list
+```
+Inspect the TSNE plots the same way.
+
+```{r}
+p.list <- lapply(
+  X = c("orig.ident", "group", "batch"),
+  FUN = function(var){
+    DimPlot_scCustom(
+      so,
+      reduction = "tsne",
+      group.by = var,
+      label = FALSE
+    )
+  }
+)
+p.list
+```
+Inspect QC Metrics on UMAP.
+
+```{r}
+p.list <- lapply(
+  X = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
+  FUN = function(var){
+    FeaturePlot_scCustom(
+      so,
+      feature = var,
+      reduction = "umap",
+      pt.size = 0.5
+    )
+  }
+)
+p.list
+```
+
+QC metrics on TSNE plot.
+
+```{r}
+p.list <- lapply(
+  X = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
+  FUN = function(var){
+    FeaturePlot_scCustom(
+      so,
+      feature = var,
+      reduction = "tsne",
+      pt.size = 0.5
+    )
+  }
+)
+p.list
+```
+These look pretty good. Have expected seperation in some areas between naive and
+CPZ treated.
+
+There's still some organization about library/mito details, have to watch that
+on the clustering.
+
+### Cluster on SCTransform
+
+```{r}
+so <- FindNeighbors(so, dims = 1:25)
+so <- FindClusters(so, resolution = c(0.05, seq(0.1, 1, by = 0.1)), verbose = FALSE)
+```
+
+Inspect clustering with clustree.
+
+```{r}
+p1 <- clustree(so, prefix = "SCT_snn_res.")
+p1
+```
+
+Inspect clustering on the UMAP.
+
+```{r}
+p.list <- lapply(
+  X = paste0("SCT_snn_res.", c(0.05, seq(0.1, 1, by = 0.1), 1.2)),
+  FUN = function(var){
+    DimPlot_scCustom(
+      so,
+      reduction = "umap",
+      group.by = var,
+      label = TRUE
+    )
+  }
+)
+p.list
+```
+
+Inspect clustering on the TSNE.
+
+```{r}
+p.list <- lapply(
+  X = paste0("SCT_snn_res.", c(0.05, seq(0.1, 1, by = 0.1))),
+  FUN = function(var){
+    DimPlot_scCustom(
+      so,
+      reduction = "tsne",
+      group.by = var,
+      label = TRUE
+    )
+  }
+)
+p.list
+```
+
+0.4 looks about right in the UMAP. 
+At that res cluster 3 is a little spread out in the TSNE.
+
+#### Inspect Res0.4 Clusters by Metadata and QC
+
+How big are the clusters?
+
+```{r}
+table(so$SCT_snn_res.0.4)
+
+```
+
+What is our proportions of group? Per batch?
+
+```{r}
+prop.table(
+  table(so$group)
+) * 100
+
+prop.table(
+  table(so$batch)
+) * 100
+```
+
+50% of our cells are from naive. The rest are split between T and V.
+
+The goal here is to identify sub-types of oligodendrocytes. Then we do proportional
+and DEG analysis.
+
+Create heatmap pivot tables on the basic metadata variables for res0.4.
+
+```{r}
+p.list <- lapply(
+  X = c("orig.ident", "group", "batch"),
+  FUN = function(var){
+    propmap(
+      so,
+      group.by = "SCT_snn_res.0.4",
+      features = var,
+      title = paste("Proportion of", var, "in SCT_snn_res.0.4 clusters"
+    ))
+  }
+)
+p.list
+```
+
+Clusters 4 and 10 are naive depleted.
+
+Clusters 3,5,8 are naive enriched.
+
+Cluster 7 is enriched for batch 2, they should be about 50/50 split.
+
+##### Inspect QC metrics per cluster
+
+```{r}
+
+p.list <- lapply(
+  X = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
+  FUN = function(var){
+    VlnPlot_scCustom(
+      so,
+      group.by = "SCT_snn_res.0.4",
+      features = var,
+      pt.size = 0
+    )
+  }
+)
+p.list
+```
+
+Cluster 10 has quite a bit more spread in library size. And just bigger overall.
+
+Check for contaminating gene markers in any of the clusters, hopefully by this
+point we'll have it pretty well cleaned up but worth checking one more time.
+
+```{r}
+marker_genes <- c(
+  "Ptprc", "Itgam", "Pdgfra", "Cspg4",  "Gfap", "Aldh1l1", "Stmn2", "Syt1"
+)
+
+p1 <- Stacked_VlnPlot(
+  so,
+  features = marker_genes,
+  group.by = "SCT_snn_res.0.4",
+  pt.size = 0
+) + NoLegend()
+p1
+```
+Looks good.
+
+##### Annotate Clusters
+
+I tried doing this FindMarkers. It works ok for the earliest cells (bottom right)
+and most mature cells (very top). But a lot of the stuff int he middle is really
+struggled with, I think beacuse there's not THAT much heterogeneity here.
+
+So instead try with scuttle methods.
+
+```{r}
+so <- JoinLayers(so)
+markers_cleaned_res02 <- scran::scoreMarkers(
+  so@assays$RNA$data,
+  groups = so$SCT_snn_res.0.2
+)
+```
+
+```{r}
+DefaultAssay(so) <- "RNA"
+```
+
+```{r}
+chosen <- markers_cleaned_res02[["3"]]
+ordered <- chosen[order(chosen$mean.AUC, decreasing = TRUE), ]
+head(ordered[,1:4], n = 20)
+```
+
+```{r}
+VlnPlot_scCustom(
+  so,
+  features = rownames(ordered)[1:6],
+  group.by = "SCT_snn_res.0.2",
+  pt.size = 0
+)
+```
+
+3 is all naive. (well 76%). 4 is a mix of the three.
+
+
+## Label Transfer from Marques
+
+```{r}
+mat <- fread("https://cells.ucsc.edu/mouse-oligo-het/exprMatrix.tsv.gz")
+meta <- data.frame(fread("https://cells.ucsc.edu/mouse-oligo-het/meta.tsv"), row.names = 1)
+genes = mat[,1][[1]]
+genes = gsub(".+[|]", "", genes)
+mat = data.frame(mat[,-1], row.names=genes)
+so_marques <- CreateSeuratObject(counts = mat, project = "marquesOl", meta.data=meta)
+```
+
+```{r}
+so_marques <- NormalizeData(so_marques) %>% FindVariableFeatures() %>% ScaleData()
+so_marques <- RunPCA(so_marques)
+so_marques <- RunUMAP(so_marques, dims = 1:20)
+```
+
+```{r}
+DefaultAssay(so) <- "RNA"
+anchors.marques <- FindTransferAnchors(
+  reference = so_marques,
+  query = so, dims = 1:20,
+  reference.reduction = "pca")
+predictions.marques <- TransferData(
+  anchorset = anchors.marques,
+  refdata = so_marques$cell_class,
+  dims = 1:20
+)
+names(predictions.marques <- 
+        paste0("marques_", names(predictions.marques))
+)
+so <- AddMetaData(
+  so,
+  metadata = predictions.marques,
+)
+```
+
+```{r}
+propmap(
+  so,
+  group.by = "SCT_snn_res.0.4",
+  features = "predicted.id",
+  title = "Proportion of marques_cell_class in SCT_snn_res.0.4 clusters"
+)
+
+```
+Lol. Everything is MOL5 except for cluster 10, which is like 300 cells, and that one is MFOL2.
+
+## Session Info
+
+```{r}
+sessionInfo()
+```
+
